@@ -846,6 +846,9 @@ class LoginController extends BaseOidcController {
 	 * Endpoint called by the IdP (OP) when end_session_endpoint is called by another client
 	 * The logout token contains the sid for which we know the sessionId
 	 * which leads to the auth token that we can invalidate
+	 * Note : in a RP-initiated logout scenario
+	 * the invalidation step should not be required since it would have been cleared
+	 * in singleLogoutService()
 	 * Implemented according to https://openid.net/specs/openid-connect-backchannel-1_0.html
 	 *
 	 * @param string $providerIdentifier
@@ -863,7 +866,7 @@ class LoginController extends BaseOidcController {
 			return $this->getBackchannelLogoutErrorResponse(
 				'provider not found',
 				'The provider was not found in Nextcloud',
-				['provider_not_found' => $providerIdentifier]
+				['extra_context' => 'Got provider identifier: ' . $providerIdentifier],
 			);
 		}
 
@@ -882,7 +885,11 @@ class LoginController extends BaseOidcController {
 			return $this->getBackchannelLogoutErrorResponse(
 				'invalid audience',
 				'The audience of the logout token does not match the provider',
-				['invalid_audience' => $logoutTokenPayload->aud]
+				[
+					'extra_context' => 'Probably is an IdP side issue',
+					'aud' => $aud,
+					'client_id' => $clientId,
+				]
 			);
 		}
 
@@ -891,7 +898,10 @@ class LoginController extends BaseOidcController {
 			return $this->getBackchannelLogoutErrorResponse(
 				'invalid event',
 				'The backchannel-logout event was not found in the logout token',
-				['invalid_event' => true]
+				[
+					'extra_context' => 'Probably is an IdP side issue',
+					'events' => $logoutTokenPayload->events,
+				]
 			);
 		}
 
@@ -900,7 +910,7 @@ class LoginController extends BaseOidcController {
 			return $this->getBackchannelLogoutErrorResponse(
 				'invalid nonce',
 				'The logout token should not contain a nonce attribute',
-				['nonce_should_not_be_set' => true]
+				['extra_context' => 'Probably is an IdP side issue'],
 			);
 		}
 
@@ -908,7 +918,10 @@ class LoginController extends BaseOidcController {
 			return $this->getBackchannelLogoutErrorResponse(
 				'invalid iss',
 				'The logout token should contain an iss attribute',
-				['iss_should_be_set' => true]
+				[
+					'extra_context' => 'Probably is an IdP side issue',
+					'iss' => $logoutTokenPayload->iss,
+				],
 			);
 		}
 		$iss = $logoutTokenPayload->iss;
@@ -917,7 +930,7 @@ class LoginController extends BaseOidcController {
 			return $this->getBackchannelLogoutErrorResponse(
 				'invalid sid+sub',
 				'The logout token should contain sid or sub or both',
-				['no_sid_no_sub' => true]
+				['extra_context' => 'Probably is an IdP side issue'],
 			);
 		}
 
@@ -929,42 +942,32 @@ class LoginController extends BaseOidcController {
 			$sub = $logoutTokenPayload->sub ?? null;
 			try {
 				$oidcSession = $this->sessionMapper->findSessionBySid($sid, $sub, $iss);
+				$oidcSessionsToKill[] = $oidcSession;
 			} catch (DoesNotExistException $e) {
 				// Already-logged-out is a success per OIDC Backchannel Logout 1.0 §2.6.
 				// https://openid.net/specs/openid-connect-backchannel-1_0.html#BCActions
-				$this->logger->debug(
-					'[BackchannelLogout] no RP session for (sid,iss) — treating as already-logged-out',
-					['sid' => $sid, 'sub_present' => $sub !== null]
-				);
-				return new JSONResponse([], Http::STATUS_OK);
+				$this->logger->debug('[BackchannelLogout] OIDC session not found with sid+sub+iss (expected for a RP-initiated logout)');
 			} catch (MultipleObjectsReturnedException $e) {
-				return $this->getBackchannelLogoutErrorResponse(
-					$sub === null ? 'invalid SID or ISS' : 'invalid SID, SUB or ISS',
-					$sub === null ? 'Multiple sessions were found with this (sid,iss)' : 'Multiple sessions were found with this (sid,sub,iss)',
-					['multiple_sessions_found' => $sid]
+				$this->logger->warning('[BackchannelLogout] Multiple OIDC sessions retrieved (sid+sub+iss). '
+				. 'This should not happen.',
+					['exception' => $e],
 				);
 			}
-			$oidcSessionsToKill[] = $oidcSession;
 		} else {
 			// here we know the sid is not set so the sub is set
 			$sub = $logoutTokenPayload->sub;
 			try {
 				$oidcSessionsToKill = $this->sessionMapper->findSessionsBySubAndIss($sub, $iss);
 			} catch (\OCP\Db\Exception $e) {
-				return $this->getBackchannelLogoutErrorResponse(
-					'error with sub+iss',
-					'Failed to retrieve session with sub+iss',
-					['sub_iss_error' => true]
+				$this->logger->error(
+					'[BackchannelLogout] Database failure while trying to retrieve user session (sub+iss)',
+					['exception' => $e],
 				);
 			}
 
 			if (empty($oidcSessionsToKill)) {
 				// Already-logged-out is a success per OIDC Backchannel Logout 1.0 §2.6.
-				$this->logger->debug(
-					'[BackchannelLogout] no RP sessions for (sub,iss) — treating as already-logged-out',
-					['sub' => $sub]
-				);
-				return new JSONResponse([], Http::STATUS_OK);
+				$this->logger->debug('[BackchannelLogout] OIDC session not found with sub+iss (expected for a RP-initiated logout)');
 			}
 		}
 
@@ -998,15 +1001,18 @@ class LoginController extends BaseOidcController {
 	 *
 	 * @param string $error
 	 * @param string $description
-	 * @param array $throttleMetadata
+	 * @param array $metadata
+	 * @param string $severity
 	 * @return JSONResponse
 	 */
 	private function getBackchannelLogoutErrorResponse(
 		string $error,
 		string $description,
-		array $throttleMetadata = [],
+		array $metadata = [],
+		string $severity = \Psr\Log\LogLevel::WARNING,
 	): JSONResponse {
-		$this->logger->debug('Backchannel logout error. ' . $error . ' ; ' . $description);
+		$this->logger->log($severity, 'Backchannel logout error. ' . $error . ' ; ' . $description,
+			$metadata);
 		return new JSONResponse(
 			[
 				'error' => $error,
