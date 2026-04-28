@@ -989,7 +989,12 @@ class LoginController extends BaseOidcController {
 			$this->sessionMapper->delete($oidcSession);
 		}
 
-		return new JSONResponse([], Http::STATUS_OK);
+		// Tell the Idp not to cache the response
+		// Per RFC : https://openid.net/specs/openid-connect-backchannel-1_0.html#BCResponse
+		$response = new JSONResponse([], Http::STATUS_OK);
+		$response->cacheFor(0);
+
+		return $response;
 	}
 
 	/**
@@ -1017,13 +1022,17 @@ class LoginController extends BaseOidcController {
 			'. This is likely a Nextcloud OIDC configuration issue.');
 		}
 
-		return new JSONResponse(
+		$response = new JSONResponse(
 			[
 				'error' => $error,
 				'error_description' => $description,
 			],
 			Http::STATUS_BAD_REQUEST,
 		);
+		// Tell the Idp not to cache the response
+		// Per RFC : https://openid.net/specs/openid-connect-backchannel-1_0.html#BCResponse
+		$response->cacheFor(0);
+		return $response;
 	}
 
 	private function toCodeChallenge(string $data): string {
