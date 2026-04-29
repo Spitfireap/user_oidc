@@ -846,6 +846,9 @@ class LoginController extends BaseOidcController {
 	 * Endpoint called by the IdP (OP) when end_session_endpoint is called by another client
 	 * The logout token contains the sid for which we know the sessionId
 	 * which leads to the auth token that we can invalidate
+	 * Note : in a RP-initiated logout scenario
+	 * the invalidation step should not be required since it would have been cleared
+	 * in singleLogoutService()
 	 * Implemented according to https://openid.net/specs/openid-connect-backchannel-1_0.html
 	 *
 	 * @param string $providerIdentifier
@@ -929,42 +932,30 @@ class LoginController extends BaseOidcController {
 			$sub = $logoutTokenPayload->sub ?? null;
 			try {
 				$oidcSession = $this->sessionMapper->findSessionBySid($sid, $sub, $iss);
+				$oidcSessionsToKill[] = $oidcSession;
 			} catch (DoesNotExistException $e) {
 				// Already-logged-out is a success per OIDC Backchannel Logout 1.0 §2.6.
 				// https://openid.net/specs/openid-connect-backchannel-1_0.html#BCActions
-				$this->logger->debug(
-					'[BackchannelLogout] no RP session for (sid,iss) — treating as already-logged-out',
-					['sid' => $sid, 'sub_present' => $sub !== null]
-				);
-				return new JSONResponse([], Http::STATUS_OK);
+				$this->logger->debug('[BackchannelLogout] OIDC session not found with sid+sub+iss (expected for a RP-initiated logout)');
 			} catch (MultipleObjectsReturnedException $e) {
-				return $this->getBackchannelLogoutErrorResponse(
-					$sub === null ? 'invalid SID or ISS' : 'invalid SID, SUB or ISS',
-					$sub === null ? 'Multiple sessions were found with this (sid,iss)' : 'Multiple sessions were found with this (sid,sub,iss)',
-					['severity' => 'error', 'extra_context' => 'Probably is a Nextcloud side issue']
+				$this->logger->warning('[BackchannelLogout] Multiple OIDC sessions retrieved (sid+sub+iss). '
+				. 'This should not happen. Please check that you have created your DB indexes'
 				);
 			}
-			$oidcSessionsToKill[] = $oidcSession;
 		} else {
 			// here we know the sid is not set so the sub is set
 			$sub = $logoutTokenPayload->sub;
 			try {
 				$oidcSessionsToKill = $this->sessionMapper->findSessionsBySubAndIss($sub, $iss);
-			} catch (\OCP\Db\Exception $e) {
-				return $this->getBackchannelLogoutErrorResponse(
-					'error with sub+iss',
-					'Failed to retrieve session with sub+iss',
-					['exception' => $e]
-				);
+			} catch (\OCP\DB\Exception $e) {
+				$this->logger->error(
+					'[BackchannelLogout] Database failure while trying to retrieve user session (sub+iss)'
+					. ['exception' => $e]);
 			}
 
 			if (empty($oidcSessionsToKill)) {
 				// Already-logged-out is a success per OIDC Backchannel Logout 1.0 §2.6.
-				$this->logger->debug(
-					'[BackchannelLogout] no RP sessions for (sub,iss) — treating as already-logged-out',
-					['sub' => $sub]
-				);
-				return new JSONResponse([], Http::STATUS_OK);
+				$this->logger->debug('[BackchannelLogout] OIDC session not found with sub+iss (expected for a RP-initiated logout)');
 			}
 		}
 
