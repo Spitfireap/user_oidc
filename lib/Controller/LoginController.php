@@ -930,16 +930,10 @@ class LoginController extends BaseOidcController {
 			try {
 				$oidcSession = $this->sessionMapper->findSessionBySid($sid, $sub, $iss);
 			} catch (DoesNotExistException $e) {
-				// Per OIDC Backchannel Logout 1.0 §2.6:
-				// "If the identified End-User is already logged out at the
-				// RP when the logout request is received, the logout is
-				// considered to have succeeded." Returning 400 here
-				// causes IdPs (e.g. LemonLDAP, Keycloak) to surface a
-				// confusing error to the user even though the desired
-				// state — the RP session being gone — is already true.
-				// See https://openid.net/specs/openid-connect-backchannel-1_0.html#BCActions
+				// Already-logged-out is a success per OIDC Backchannel Logout 1.0 §2.6.
+				// https://openid.net/specs/openid-connect-backchannel-1_0.html#BCActions
 				$this->logger->debug(
-					'[BackchannelLogout] no RP session for (sid,iss) — treating as already-logged-out per spec',
+					'[BackchannelLogout] no RP session for (sid,iss) — treating as already-logged-out',
 					['sid' => $sid, 'sub_present' => $sub !== null]
 				);
 				return new JSONResponse([], Http::STATUS_OK);
@@ -965,11 +959,9 @@ class LoginController extends BaseOidcController {
 			}
 
 			if (empty($oidcSessionsToKill)) {
-				// Per OIDC Backchannel Logout 1.0 §2.6 (already-logged-
-				// out is a success). Same rationale as the (sid,iss)
-				// branch above.
+				// Already-logged-out is a success per OIDC Backchannel Logout 1.0 §2.6.
 				$this->logger->debug(
-					'[BackchannelLogout] no RP sessions for (sub,iss) — treating as already-logged-out per spec',
+					'[BackchannelLogout] no RP sessions for (sub,iss) — treating as already-logged-out',
 					['sub' => $sub]
 				);
 				return new JSONResponse([], Http::STATUS_OK);
