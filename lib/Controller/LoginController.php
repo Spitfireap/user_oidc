@@ -958,7 +958,7 @@ class LoginController extends BaseOidcController {
 			$sub = $logoutTokenPayload->sub;
 			try {
 				$oidcSessionsToKill = $this->sessionMapper->findSessionsBySubAndIss($sub, $iss);
-			} catch (\OCP\Db\Exception $e) {
+			} catch (\OCP\DB\Exception $e) {
 				$this->logger->error(
 					'[BackchannelLogout] Database failure while trying to retrieve user session (sub+iss)',
 					['exception' => $e],
