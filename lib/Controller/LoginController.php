@@ -870,6 +870,16 @@ class LoginController extends BaseOidcController {
 			);
 		}
 
+		try {
+			$discovery = $this->discoveryService->obtainDiscovery($provider);
+		} catch (\Exception $e) {
+			return $this->getBackchannelLogoutErrorResponse(
+				'could not reach provider endpoint',
+				'URL: ' . $provider->getDiscoveryEndpoint() . 'was not reachable',
+				severity: \Psr\Log\LogLevel::ERROR,
+			);
+		}
+
 		// decrypt the logout token
 		$jwks = $this->discoveryService->obtainJWK($provider, $logout_token);
 		JWT::$leeway = 60;
@@ -936,6 +946,31 @@ class LoginController extends BaseOidcController {
 		}
 
 		$iss = $logoutTokenPayload->iss;
+		$discoveryIssuer = $discovery['issuer'] ?? '';
+		if ($iss !== $discoveryIssuer) {
+			return $this->getBackchannelLogoutErrorResponse(
+				'invalid iss',
+				'The iss of the logout token does not match the issuer',
+				[
+					'extra_context' => 'Probably is an IdP side issue',
+					'iss' => $iss,
+					'issuer' => $discoveryIssuer,
+				],
+			);
+		}
+
+		if ($logoutTokenPayload->exp < $this->timeFactory->getTime()) {
+			return  $this->getBackchannelLogoutErrorResponse(
+				'invalid exp',
+				'The logout token is expired',
+				[
+					'extra_context' => 'Probably is an IdP side issue',
+					'exp' => $logoutTokenPayload->exp,
+					'current_time' => $this->timeFactory->getTime(),
+				],
+			);
+		}
+
 		if (!isset($logoutTokenPayload->sid) && !isset($logoutTokenPayload->sub)) {
 			return $this->getBackchannelLogoutErrorResponse(
 				'invalid sid+sub',
