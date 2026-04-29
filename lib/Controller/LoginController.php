@@ -872,6 +872,17 @@ class LoginController extends BaseOidcController {
 			);
 		}
 
+		try {
+			$discovery = $this->discoveryService->obtainDiscovery($provider);
+		} catch (\Exception $e) {
+			$this->logger->error('Could not reach the provider at URL ' . $provider->getDiscoveryEndpoint(), ['exception' => $e]);
+			return $this->getBackchannelLogoutErrorResponse(
+				'could not reach provider endpoint',
+				'URL: ' . $provider->getDiscoveryEndpoint() . 'was not reachable',
+				true
+			);
+		}
+
 		// decrypt the logout token
 		$jwks = $this->discoveryService->obtainJWK($provider, $logout_token);
 		JWT::$leeway = 60;
@@ -915,8 +926,23 @@ class LoginController extends BaseOidcController {
 				'The logout token should contain an iss attribute',
 				true
 			);
+		} elseif ($iss !== $discovery['issuer']) {
+			return $this->getBackchannelLogoutErrorResponse(
+				'invalid iss',
+				'The iss of the logout token does not match the issuer',
+				false
+			);
 		}
 		$iss = $logoutTokenPayload->iss;
+
+		if (!isset($logoutTokenPayload->exp) || $logoutTokenPayload->exp < $this->timeFactory->getTime()) {
+			$this->logger->debug('Logout token expired');
+			return  $this->getBackchannelLogoutErrorResponse(
+				'invalid exp',
+				'The logout token is expired',
+				true
+			);
+		}
 
 		if (!isset($logoutTokenPayload->sid) && !isset($logoutTokenPayload->sub)) {
 			return $this->getBackchannelLogoutErrorResponse(
