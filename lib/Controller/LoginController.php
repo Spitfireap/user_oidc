@@ -877,6 +877,27 @@ class LoginController extends BaseOidcController {
 
 		$this->logger->debug('Parsed the logout JWT payload: ' . json_encode($logoutTokenPayload, JSON_THROW_ON_ERROR));
 
+		// REQUIRED claims check step
+		// https://openid.net/specs/openid-connect-backchannel-1_0.html#LogoutToken
+		$requiredClaims = ['iss', 'aud', 'iat', 'exp', 'jti', 'events'];
+		$missingClaims = [];
+		$logoutTokenArray = (array) $logoutTokenPayload;
+		foreach ($requiredClaims as $claim) {
+			if (!in_array($claim, $logoutTokenArray)) {
+				$missingClaims[] = $claim;
+			}
+		}
+		if (!empty($missingClaims)) {
+			return $this->getBackchannelLogoutErrorResponse(
+				'missing one or more claims',
+				'missing the following claim(s) : ' . implode(', ', $missingClaims),
+			    ['severity' => 'warning', 'extra_context' => 'Probably is an IdP side issue']
+			);
+		}
+
+		// Logout token validation step
+		// https://openid.net/specs/openid-connect-backchannel-1_0.html#Validation
+
 		// check the audience
 		$aud = $logoutTokenPayload->aud;
 		$clientId = $provider->getClientId();
@@ -890,7 +911,7 @@ class LoginController extends BaseOidcController {
 		}
 
 		// check the event attr
-		if (!isset($logoutTokenPayload->events->{'http://schemas.openid.net/event/backchannel-logout'})) {
+		if (!$logoutTokenPayload->events->{'http://schemas.openid.net/event/backchannel-logout'}) {
 			return $this->getBackchannelLogoutErrorResponse(
 				'invalid event',
 				'The backchannel-logout event was not found in the logout token',
@@ -907,13 +928,6 @@ class LoginController extends BaseOidcController {
 			);
 		}
 
-		if (!isset($logoutTokenPayload->iss)) {
-			return $this->getBackchannelLogoutErrorResponse(
-				'invalid iss',
-				'The logout token should contain an iss attribute',
-				['severity' => 'warning', 'extra_context' => 'Probably is an IdP side issue']
-			);
-		}
 		$iss = $logoutTokenPayload->iss;
 
 		if (!isset($logoutTokenPayload->sid) && !isset($logoutTokenPayload->sub)) {
@@ -950,7 +964,8 @@ class LoginController extends BaseOidcController {
 			} catch (\OCP\DB\Exception $e) {
 				$this->logger->error(
 					'[BackchannelLogout] Database failure while trying to retrieve user session (sub+iss)'
-					. ['exception' => $e]);
+					. ['exception' => $e]
+				);
 			}
 
 			if (empty($oidcSessionsToKill)) {
