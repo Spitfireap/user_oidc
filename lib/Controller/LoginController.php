@@ -868,7 +868,7 @@ class LoginController extends BaseOidcController {
 			return $this->getBackchannelLogoutErrorResponse(
 				'provider not found',
 				'The provider was not found in Nextcloud',
-				false
+				['criticity' => 'warning', 'extra_context' => 'Got provider identifier: ' . $providerIdentifier]
 			);
 		}
 
@@ -879,7 +879,7 @@ class LoginController extends BaseOidcController {
 			return $this->getBackchannelLogoutErrorResponse(
 				'could not reach provider endpoint',
 				'URL: ' . $provider->getDiscoveryEndpoint() . 'was not reachable',
-				true
+				['criticity' => 'error']
 			);
 		}
 
@@ -903,7 +903,8 @@ class LoginController extends BaseOidcController {
 		if (!empty($missingClaims)) {
 			return $this->getBackchannelLogoutErrorResponse(
 				'missing one or more claims',
-				'missing the following claim(s) : ' . implode(', ', $missingClaims)
+				'missing the following claim(s) : ' . implode(', ', $missingClaims),
+				['criticity' => 'warning', 'extra_context' => 'Probably is an IdP side issue']
 			);
 		}
 
@@ -918,7 +919,7 @@ class LoginController extends BaseOidcController {
 			return $this->getBackchannelLogoutErrorResponse(
 				'invalid audience',
 				'The audience of the logout token does not match the provider',
-				true
+				['criticity' => 'warning', 'extra_context' => 'Probably is an IdP side issue']
 			);
 		}
 
@@ -927,7 +928,7 @@ class LoginController extends BaseOidcController {
 			return $this->getBackchannelLogoutErrorResponse(
 				'invalid event',
 				'The backchannel-logout event was not found in the logout token',
-				true
+				['criticity' => 'warning', 'extra_context' => 'Probably is an IdP side issue']
 			);
 		}
 
@@ -936,7 +937,7 @@ class LoginController extends BaseOidcController {
 			return $this->getBackchannelLogoutErrorResponse(
 				'invalid nonce',
 				'The logout token should not contain a nonce attribute',
-				true
+				['criticity' => 'warning', 'extra_context' => 'Probably is an IdP side issue']
 			);
 		}
 
@@ -945,7 +946,7 @@ class LoginController extends BaseOidcController {
 			return $this->getBackchannelLogoutErrorResponse(
 				'invalid iss',
 				'The iss of the logout token does not match the issuer',
-				false
+				['criticity' => 'warning', 'extra_context' => 'Probably is an IdP side issue']
 			);
 		}
 		$iss = $logoutTokenPayload->iss;
@@ -955,7 +956,7 @@ class LoginController extends BaseOidcController {
 			return  $this->getBackchannelLogoutErrorResponse(
 				'invalid exp',
 				'The logout token is expired',
-				true
+				['criticity' => 'warning', 'extra_context' => 'Probably is an IdP side issue']
 			);
 		}
 
@@ -963,7 +964,7 @@ class LoginController extends BaseOidcController {
 			return $this->getBackchannelLogoutErrorResponse(
 				'invalid sid+sub',
 				'The logout token should contain sid or sub or both',
-				true
+				['criticity' => 'warning', 'extra_context' => 'Probably is an IdP side issue']
 			);
 		}
 
@@ -989,10 +990,11 @@ class LoginController extends BaseOidcController {
 			$sub = $logoutTokenPayload->sub;
 			try {
 				$oidcSessionsToKill = $this->sessionMapper->findSessionsBySubAndIss($sub, $iss);
-			} catch (\OCP\Db\Exception $e) {
+			} catch (\OCP\DB\Exception $e) {
 				$this->logger->error(
-					'[BackchannelLogout] Database failure while trying to retrieve user session (sub+iss)'
-				. ['exception' => $e]);
+					'[BackchannelLogout] Database failure while trying to retrieve user session (sub+iss)',
+					['exception' => $e]
+				);
 			}
 
 			if (empty($oidcSessionsToKill)) {
@@ -1036,24 +1038,24 @@ class LoginController extends BaseOidcController {
 	 *
 	 * @param string $error
 	 * @param string $description
-	 * @param array $throttleMetadata
+	 * @param array $metadata
 	 * @return JSONResponse
 	 */
 	private function getBackchannelLogoutErrorResponse(
 		string $error,
 		string $description,
-		bool $isLikelyIdpSide,
+		array $metadata,
 	): JSONResponse {
-		// Inform admins that the backchannel logout didn't work because of a misconfiguration
-		if ($isLikelyIdpSide) {
-			$this->logger->error('Backchannel logout error. ' . $error . ' ; ' . $description .
-			'. This is likely an IdP issue.');
-		} else {
-			// If the provider is not found
-			// it might be an unknown OIDC server trying to disconnect unlawfully
-			$this->logger->warning('Backchannel logout error. ' . $error . ' ; ' . $description .
-			'. This is likely a Nextcloud OIDC configuration issue.');
+		$logSeverity = 'debug';
+		if (isset($metadata["severity"])) {
+			$logSeverity = $metadata["severity"];
 		}
+		$extraContext = '';
+		if (isset($metadata['extra_context'])) {
+			$extraContext = $metadata['extra_context'];
+		}
+		$this->logger->log($logSeverity, 'Backchannel logout error. ' . $error . ' ; ' . $description,
+						   ['extra_context' => $extraContext]);
 
 		$response = new JSONResponse(
 			[
