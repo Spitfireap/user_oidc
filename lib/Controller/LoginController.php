@@ -930,11 +930,13 @@ class LoginController extends BaseOidcController {
 			try {
 				$oidcSession = $this->sessionMapper->findSessionBySid($sid, $sub, $iss);
 			} catch (DoesNotExistException $e) {
-				return $this->getBackchannelLogoutErrorResponse(
-					$sub === null ? 'invalid SID or ISS' : 'invalid SID, SUB or ISS',
-					$sub === null ? 'No session was found for this (sid,iss)' : 'No session was found for this (sid,sub,iss)',
-					['session_not_found' => $sid]
+				// Already-logged-out is a success per OIDC Backchannel Logout 1.0 §2.6.
+				// https://openid.net/specs/openid-connect-backchannel-1_0.html#BCActions
+				$this->logger->debug(
+					'[BackchannelLogout] no RP session for (sid,iss) — treating as already-logged-out',
+					['sid' => $sid, 'sub_present' => $sub !== null]
 				);
+				return new JSONResponse([], Http::STATUS_OK);
 			} catch (MultipleObjectsReturnedException $e) {
 				return $this->getBackchannelLogoutErrorResponse(
 					$sub === null ? 'invalid SID or ISS' : 'invalid SID, SUB or ISS',
@@ -957,11 +959,12 @@ class LoginController extends BaseOidcController {
 			}
 
 			if (empty($oidcSessionsToKill)) {
-				return $this->getBackchannelLogoutErrorResponse(
-					'nothing found with sub+iss',
-					'No session found with sub+iss',
-					['sub_iss_no_session_found' => true]
+				// Already-logged-out is a success per OIDC Backchannel Logout 1.0 §2.6.
+				$this->logger->debug(
+					'[BackchannelLogout] no RP sessions for (sub,iss) — treating as already-logged-out',
+					['sub' => $sub]
 				);
+				return new JSONResponse([], Http::STATUS_OK);
 			}
 		}
 
