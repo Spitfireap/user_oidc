@@ -889,7 +889,8 @@ class LoginController extends BaseOidcController {
 
 		// REQUIRED claims check step
 		// https://openid.net/specs/openid-connect-backchannel-1_0.html#LogoutToken
-		$requiredClaims = ['iss', 'aud', 'iat', 'exp', 'jti', 'events'];
+		// Note : exp claim is deliberately not checked. See #1432
+		$requiredClaims = ['iss', 'aud', 'iat', 'jti', 'events'];
 		$missingClaims = [];
 		$logoutTokenArray = (array)$logoutTokenPayload;
 		foreach ($requiredClaims as $claim) {
@@ -959,7 +960,7 @@ class LoginController extends BaseOidcController {
 			);
 		}
 
-		if ($logoutTokenPayload->exp < $this->timeFactory->getTime()) {
+		if (isset($logoutTokenPayload->exp) && $logoutTokenPayload->exp < $this->timeFactory->getTime()) {
 			return  $this->getBackchannelLogoutErrorResponse(
 				'invalid exp',
 				'The logout token is expired',
